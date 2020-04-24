@@ -58,12 +58,14 @@ public class LockFreeVector<E> extends AbstractList<E> {
     private static final int N_BUCKET = 30;
 
     /**
+     * 采用二维数组存储内部元素，方便扩容
      * We will have at most N_BUCKET number of buckets. And we have
      * sizeof(buckets.get(i))=FIRST_BUCKET_SIZE**(i+1)
      */
     private final AtomicReferenceArray<AtomicReferenceArray<E>> buckets;
 
     /**
+     * 用来描述写操作
      * The descriptor is used to describe write operation.
      * 
      * @param <E>
@@ -78,10 +80,12 @@ public class LockFreeVector<E> extends AbstractList<E> {
          */
         public E newV;
         /**
+         * 需要修改的原子数组
          * Address array to be updated.
          */
         public AtomicReferenceArray<E> addr;
         /**
+         * 需要写入的数组的索引
          * Index of address array.
          */
         public int addrInd;
@@ -115,6 +119,7 @@ public class LockFreeVector<E> extends AbstractList<E> {
     }
 
     /**
+     * 用来描述栈的当前状态
      * The descriptor is used to describe current status of vector. It exists so
      * that we can replace two important information in one CAS operation:
      * <ul>
@@ -132,10 +137,12 @@ public class LockFreeVector<E> extends AbstractList<E> {
      */
     static class Descriptor<E> {
         /**
+         * 整个Vector的大小
          * we store size of vector into descriptor to get atomicity.
          */
         public int size;
         /**
+         * 写操作是通过这个writeop对象进行的
          * Write operation.
          */
         volatile WriteDescriptor<E> writeop;
@@ -167,8 +174,11 @@ public class LockFreeVector<E> extends AbstractList<E> {
     }
 
     /**
+     * 对Vector内的所有资源的操作，都需要通过descriptor的控制，通过Descriptor对象进行cas操作
+     *
      * This descriptor which contains important information. such as:
-     * 
+     *
+     * descriptor保存了Vector的大小和下一次操作的位置
      * <ul>
      * <li>size of vector</li>
      * <li>next operation to execute</li>
@@ -184,12 +194,14 @@ public class LockFreeVector<E> extends AbstractList<E> {
      */
     public LockFreeVector() {
         buckets = new AtomicReferenceArray<AtomicReferenceArray<E>>(N_BUCKET);
+        //第一个数组默认大小设置为8，如果后续扩容，则一次按照16 32 64的大小进行扩容,最终最多能扩容到32个数组
         buckets.set(0, new AtomicReferenceArray<E>(FIRST_BUCKET_SIZE));
         descriptor = new AtomicReference<Descriptor<E>>(new Descriptor<E>(0,
                 null));
     }
 
     /**
+     * 数据写入的两个资源并发：descriptor和buckets，均要进行并发写
      * add e at the end of vector.
      * 
      * @param e
@@ -205,15 +217,16 @@ public class LockFreeVector<E> extends AbstractList<E> {
 
             int pos = desc.size + FIRST_BUCKET_SIZE;
             int zeroNumPos = Integer.numberOfLeadingZeros(pos);
+            //计算该索引应该存放的数组位置
             int bucketInd = ZERO_NUM_FIRST - zeroNumPos;
 
-            // Add a new segment if all segments are occupied
+            // Add a new segment if all segments are occupied 需要扩容
             if (buckets.get(bucketInd) == null) {
                 int newLen = 2 * buckets.get(bucketInd - 1).length();
 
                 if (DEBUG)
                     System.out.println("New Length is:" + newLen);
-
+                //cas操作，扩容一个新的数组
                 buckets.compareAndSet(bucketInd, null,
                         new AtomicReferenceArray<E>(newLen));
             }
@@ -224,8 +237,8 @@ public class LockFreeVector<E> extends AbstractList<E> {
 
             newd = new Descriptor<E>(desc.size + 1, new WriteDescriptor<E>(
                     buckets.get(bucketInd), idx, null, e));
-        } while (!descriptor.compareAndSet(desc, newd));
-        descriptor.get().completeWrite();
+        } while (!descriptor.compareAndSet(desc, newd));//原子的修改buckets的descriptor写入位置,防止其他线程有改动
+        descriptor.get().completeWrite();//上一步成功的替换了descriptor，则可以进行安全的写元素e的操作
     }
 
     /**
